@@ -2,7 +2,7 @@
 
 MyClipFactory processa gravações autorizadas de gameplay para revisão editorial. A aplicação atende um operador por instalação e usa uma interface HTTP de mesma origem.
 
-1. Ingestão. O servidor recebe o MP4 em fluxo, persiste o original e lê metadados com FFprobe. O operador inicia um job durável. O worker valida a decodificação e extrai áudio e amostras visuais.
+1. Ingestão. O servidor recebe MP4 ou WebM em fluxo, persiste o original e lê metadados com FFprobe. O operador inicia um job durável. O worker valida a decodificação e extrai áudio e amostras visuais.
 2. Análise. O transcritor devolve segmentos e palavras com timestamps absolutos, probabilidades e marcações de revisão. A análise junta fala, intensidade e movimento em candidatos com janela, pontuação, evidências e plano de enquadramento. O resultado é persistido antes da renderização.
 3. Renderização. O editor recebe a janela, o plano visual e a transcrição corrigida. FFmpeg gera MP4 9:16 com H.264/AAC e legendas ASS. A revisão registra versões de edição e invalida as aprovações pendentes da versão anterior.
 4. Publicação. A fila guarda data de execução e aprovação da versão por conta. Cada adaptador recebe os metadados aprovados e registra o identificador remoto antes de consultar o resultado. Erros ambíguos exigem reconciliação antes de uma nova tentativa.
@@ -14,7 +14,7 @@ FFmpeg, FFprobe e o modelo local permitem processamento sem custo por chamada. O
 
 ## Implementação
 
-- `clipfactory.api` recebe o MP4 sem buffering integral, valida o contêiner, cria registros e entrega o estúdio de mesma origem.
+- `clipfactory.api` recebe MP4 e WebM sem buffering integral, valida o contêiner, cria registros e entrega o estúdio de mesma origem.
 - `clipfactory.store` mantém SQLite em WAL. As transações de escrita reservam jobs e protegem as transições. Um lease permite que outro worker retome jobs interrompidos. Guardar no disco local simplifica instalação e operação de instância única.
 - `clipfactory.media`, `transcription`, `editorial`, `vision` e `render` isolam os limites com FFmpeg, CTranslate2, OpenCV, Ollama e o editor. O transcritor divide o áudio em blocos sobrepostos de oito minutos. O cache é identificado por gravação, opções e modelos. Os candidatos têm uma chave determinística para evitar duplicação ao repetir a mesma análise.
 - `clipfactory.publisher` concentra autenticação, fila e protocolos independentes. O identificador de envio é vinculado à edição e à conta. O MP4 só fica legível externamente por URL de mídia assinada para um destino autorizado que recebe o arquivo por URL HTTPS. O histórico guarda a versão enviada, os metadados e métricas de operação.

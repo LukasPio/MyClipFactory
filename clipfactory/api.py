@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Settings
-from .media import MediaError, probe
+from .media import SOURCE_FORMATS, MediaError, probe
 from .publisher import oauth, queue, tiktok
 from .publisher.base import PublishError
 from .schemas import Edit, Metrics, Processing, Publish, Review
@@ -103,15 +103,17 @@ def create_app(settings=None):
 
     @app.post("/api/videos", status_code=201)
     async def upload(request: Request, name: str = Query(min_length=1, max_length=180)):
-        if not name.lower().endswith(".mp4") or request.headers.get("content-type", "").split(";")[0] != "video/mp4":
-            raise HTTPException(415, "Envie um arquivo .mp4 como video/mp4.")
+        extension = Path(name).suffix.lower()
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if extension not in SOURCE_FORMATS or content_type != SOURCE_FORMATS[extension][0]:
+            raise HTTPException(415, "Envie um arquivo MP4 (video/mp4) ou WebM (video/webm).")
         size = 0
         length = request.headers.get("content-length", "")
         if length.isdecimal() and int(length) > settings.max_bytes:
             raise HTTPException(413, "O arquivo excede o limite desta instalação.")
         identifier = uid()
         temp = settings.file("sources", identifier + ".part")
-        target = temp.with_suffix(".mp4")
+        target = temp.with_suffix(extension)
         try:
             with temp.open("xb") as file:
                 async for chunk in request.stream():
@@ -120,7 +122,7 @@ def create_app(settings=None):
                         raise HTTPException(413, "O arquivo excede o limite desta instalação.")
                     await run_in_threadpool(file.write, chunk)
             try:
-                info = await run_in_threadpool(probe, temp, settings.max_hours * 3600)
+                info = await run_in_threadpool(probe, temp, settings.max_hours * 3600, extension=extension)
             except MediaError as error:
                 raise HTTPException(422, str(error)) from error
             temp.replace(target)

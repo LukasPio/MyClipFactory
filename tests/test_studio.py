@@ -22,6 +22,7 @@ from clipfactory.publisher import oauth, queue
 from clipfactory.schemas import Captions
 from clipfactory.store import Store, uid
 from clipfactory.transcription import transcribe
+from clipfactory.vision import jpeg_at
 
 from .fixture import fixture_transcript, sample
 
@@ -104,6 +105,49 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(self.library()["videos"], [])
         self.assertFalse(list((self.settings.data / "sources").glob("*")))
 
+    def test_webm_upload_analysis_and_mp4_export(self):
+        webm = self.settings.data / "recording.webm"
+        run(ffmpeg("-i", self.source, "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "6",
+                   "-threads:v", "2", "-c:a", "libopus", "-live", "1", webm))
+        with webm.open("rb") as file:
+            response = self.client.post("/api/videos?name=recording.WEBM", content=file,
+                                        headers={"Content-Type": "video/webm; codecs=vp9,opus"})
+        self.assertEqual(response.status_code, 201, response.text)
+        video = response.json()
+        info = video["info"]
+        self.assertAlmostEqual(info["duration"], 42, delta=.2)
+        self.assertEqual((info["codec"], info["audio"][0]["codec"]), ("vp9", "opus"))
+        source = self.settings.file("sources", f"{video['id']}.webm")
+        self.assertTrue(source.is_file())
+        self.assertTrue(base64.b64decode(jpeg_at(source, info["video_stream"], 12, lambda: None)).startswith(b"\xff\xd8"))
+
+        self.process(video["id"], limit=1)
+        self.drain()
+        data = self.library()
+        self.assertEqual([job["state"] for job in data["jobs"]], ["DONE", "DONE"], data["jobs"])
+        clip = data["clips"][0]
+        response = self.client.get(f"/api/clips/{clip['id']}/video?download=true")
+        self.assertEqual(response.status_code, 200, response.text if response.is_error else "")
+        self.assertEqual(response.headers["Content-Type"], "video/mp4")
+        rendered = probe(self.settings.file("clips", f"{clip['id']}-1.mp4"), 90)
+        self.assertEqual((rendered["codec"], rendered["audio"][0]["codec"]), ("h264", "aac"))
+        self.assertAlmostEqual(rendered["duration"], clip["fields"]["end"] - clip["fields"]["start"], delta=.17)
+
+    def test_webm_upload_rejects_invalid_container_and_mime_type(self):
+        mkv = self.settings.data / "renamed.mkv"
+        run(ffmpeg("-i", self.source, "-c", "copy", mkv))
+        for content, mime_type, status in [
+            (b"invalid", "video/webm", 422),
+            (mkv.read_bytes(), "video/webm", 422),
+            (b"invalid", "video/mp4", 415),
+        ]:
+            with self.subTest(mime_type=mime_type, status=status):
+                response = self.client.post("/api/videos?name=recording.webm", content=content,
+                                            headers={"Content-Type": mime_type})
+                self.assertEqual(response.status_code, status, response.text)
+        self.assertEqual(self.library()["videos"], [])
+        self.assertFalse(list((self.settings.data / "sources").glob("*")))
+
     def test_delayed_audio_stays_on_the_source_timeline(self):
         video = self.settings.data / "audio-offset.mp4"
         wav = self.settings.data / "audio-offset.wav"
@@ -136,6 +180,10 @@ class StudioTest(unittest.TestCase):
 
     def test_multimodal_edit_render_and_publication_contracts(self):
         video = self.send()
+        with self.store.tx(True) as conn:
+            info = video["info"].copy()
+            del info["extension"]
+            conn.execute("UPDATE videos SET info=? WHERE id=?", (json.dumps(info), video["id"]))
         job = self.process(video["id"])
         self.drain()
         data = self.library()

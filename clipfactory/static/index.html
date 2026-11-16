@@ -25,9 +25,9 @@
         <div class="heading"><div><h1>Vídeos</h1><p>Envie suas gravações autorizadas de gameplay para criar cortes verticais.</p></div></div>
         <form id="upload" class="upload">
           <div class="upload-icon" aria-hidden="true">↑</div>
-          <div><h2>Adicionar gravação</h2><p>Arquivo MP4 com uma faixa de áudio.</p></div>
+          <div><h2>Adicionar gravação</h2><p>Arquivo MP4 ou WebM com uma faixa de áudio.</p></div>
           <label class="consent"><input id="rights" type="checkbox" required> Tenho autorização para editar esta gravação.</label>
-          <div class="upload-actions"><input id="source" aria-label="Arquivo MP4" type="file" accept="video/mp4,.mp4" required><button class="primary" type="submit">Enviar MP4</button></div>
+          <div class="upload-actions"><input id="source" aria-label="Arquivo de vídeo" type="file" accept="video/mp4,.mp4,video/webm,.webm" required><button class="primary" type="submit">Enviar vídeo</button></div>
           <progress id="upload-progress" max="100" value="0" hidden aria-label="Progresso do upload"></progress>
           <p id="upload-status" role="status" hidden></p>
         </form>

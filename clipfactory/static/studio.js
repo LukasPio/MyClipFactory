@@ -517,17 +517,19 @@ async function refresh() {
 }
 
 function sendVideo(file, progress, status) {
+  const extension = /\.(mp4|webm)$/i.exec(file.name);
+  if (!extension) return Promise.reject(new Error("Selecione um arquivo MP4 ou WebM."));
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/videos?name=" + encodeURIComponent(file.name));
-    xhr.setRequestHeader("Content-Type", "video/mp4");
+    xhr.setRequestHeader("Content-Type", `video/${extension[1].toLowerCase()}`);
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
         progress.value = Math.round(event.loaded / event.total * 100);
         status.textContent = `Enviando · ${progress.value}%`;
       }
     };
-    xhr.upload.onload = () => { status.textContent = "Verificando o contêiner MP4…"; };
+    xhr.upload.onload = () => { status.textContent = "Verificando o arquivo de vídeo…"; };
     xhr.onerror = () => reject(new Error("A conexão foi interrompida durante o upload."));
     xhr.onload = () => {
       let result = {};
