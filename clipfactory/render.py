@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from .captions import subtitles
-from .media import ffmpeg, run
+from .media import ffmpeg, run, source_input
 
 
 def layouts(candidate, edit):
@@ -79,7 +79,7 @@ def render(source, output, info, transcript, candidate, edit, audio_stream, sett
     with TemporaryDirectory(prefix="mcf-render-", dir=settings.file("tmp", "placeholder").parent) as directory:
         temp = Path(directory)
         subtitles(temp / "caption.ass", transcript, edit, candidate["webcam"])
-        args = ["-xerror", "-ss", f"{start:.3f}", "-threads", "2", "-f", "mov", "-i", source]
+        args = ["-xerror", "-ss", f"{start:.3f}", "-threads", "2", *source_input(source)]
         if track:
             args.extend(["-stream_loop", "-1", "-i", track])
         inputs = [f"src{i}" for i in range(len(chapters))]

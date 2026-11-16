@@ -99,7 +99,7 @@ class Worker:
         with self.store.tx() as conn:
             row = conn.execute("SELECT * FROM analysis_cache WHERE video_id=? AND cache_key=?",
                                (video_id, fingerprint)).fetchone()
-        source = self.settings.file("sources", f"{video_id}.mp4")
+        source = self.settings.file("sources", video_id + info.get("extension", ".mp4"))
         if row:
             report(80, "Reutilizando transcrição e análise salvas.")
             cache = unpack(row, "transcript", "analysis")
@@ -163,7 +163,7 @@ class Worker:
                                  (clip["id"], candidate["cache_key"])).fetchone()
             transcript = unpack(cache, "transcript")["transcript"]
         report(15, "Preparando corte, trilha e legendas.")
-        source = self.settings.file("sources", f"{clip['id']}.mp4")
+        source = self.settings.file("sources", clip["id"] + clip["info"].get("extension", ".mp4"))
         stage = self.settings.file("tmp", f"{job['id']}-{job['owner']}.mp4")
         output = self.settings.file("clips", f"{clip_id}-{revision}.mp4")
         try:

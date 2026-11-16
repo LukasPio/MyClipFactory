@@ -6,7 +6,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .media import ffmpeg, run
+from .media import ffmpeg, run, source_input
 
 
 class Judgment(BaseModel):
@@ -30,7 +30,7 @@ Use apenas o objeto JSON do schema. Não atribua falas que não constem no texto
 
 
 def jpeg_at(source, video_stream, stamp, check):
-    jpeg = run(ffmpeg("-ss", f"{stamp:.3f}", "-threads", "1", "-f", "mov", "-i", source,
+    jpeg = run(ffmpeg("-ss", f"{stamp:.3f}", "-threads", "1", *source_input(source),
                       "-map", f"0:{video_stream}", "-frames:v", "1", "-filter_threads", "1",
                       "-vf", "scale=448:-2", "-c:v", "mjpeg", "-threads", "1", "-f", "image2pipe", "pipe:1"),
                check, capture=True, timeout=25)

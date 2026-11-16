@@ -1,6 +1,6 @@
 # MyClipFactory
 
-Estúdio local para transformar MP4s autorizados de gameplay em clipes verticais legendados. O painel acompanha as gravações, as renderizações, a revisão por versão e os envios que o operador autoriza em cada conta.
+Estúdio local para transformar gravações autorizadas de gameplay em MP4 ou WebM em clipes verticais legendados. O painel acompanha as gravações, as renderizações, a revisão por versão e os envios que o operador autoriza em cada conta.
 
 ## Instalação
 
@@ -31,7 +31,7 @@ Abra [http://127.0.0.1:8000](http://127.0.0.1:8000). Ambos os processos devem us
 
 ## Operação
 
-1. Em **Vídeos**, confirme a autorização de uso e envie o MP4. A inspeção lista duração, FPS, resolução, codec e faixas disponíveis para análise.
+1. Em **Vídeos**, confirme a autorização de uso e envie o arquivo MP4 ou WebM com pelo menos uma faixa de áudio. A inspeção lista duração, FPS, resolução, codec e faixas disponíveis para análise.
 2. Clique em **Processar** e ajuste duração, quantidade, idioma e faixa de áudio. A webcam pode ser detectada automaticamente ou indicada com as coordenadas percentuais da sobreposição.
 3. A fila exibe etapas registradas pelo worker. É possível cancelar, consultar logs e tentar de novo. Decodificação do áudio e do vídeo precede a transcrição.
 4. Em **Cortes**, revise o score, a justificativa e o MP4. Ajuste o intervalo, o enquadramento, os metadados e as legendas. Corrija a transcrição na mesma tela. Ao salvar, o worker renderiza somente o corte usando a análise persistida.
