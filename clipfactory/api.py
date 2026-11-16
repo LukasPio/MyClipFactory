@@ -156,11 +156,11 @@ def create_app(settings=None):
                 "publications": publications, "integrations": integrations, "metrics": metrics}
 
     @app.get("/api/jobs/{job_id}/events")
-    def events(job_id: str):
+    def events(job_id: str, after: int = Query(default=0, ge=0, le=2**63 - 1)):
         with store.tx() as conn:
             one(conn, "jobs", job_id)
             return [dict(row) for row in conn.execute(
-                "SELECT stamp,progress,message FROM events WHERE job_id=? ORDER BY seq", (job_id,))]
+                "SELECT seq,stamp,progress,message FROM events WHERE job_id=? AND seq>? ORDER BY seq", (job_id, after))]
 
     @app.post("/api/videos/{video_id}/process", status_code=202)
     def process(video_id: str, payload: Processing):
@@ -187,8 +187,11 @@ def create_app(settings=None):
             if job["state"] not in {"QUEUED", "RUNNING"}:
                 raise HTTPException(409, "O processamento já terminou.")
             state = "CANCELLED" if job["state"] == "QUEUED" else "RUNNING"
+            message = "Processamento cancelado na fila." if state == "CANCELLED" else "Cancelamento solicitado."
             conn.execute("UPDATE jobs SET cancel=1,state=?,message=? WHERE id=?",
-                         (state, "Cancelamento solicitado.", job_id))
+                         (state, message, job_id))
+            conn.execute("INSERT INTO events(job_id,stamp,progress,message) VALUES(?,?,?,?)",
+                         (job_id, time.time(), job["progress"], message))
         return {"state": state}
 
     @app.post("/api/jobs/{job_id}/retry", status_code=202)

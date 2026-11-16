@@ -8,8 +8,10 @@ const labels = {
   SCHEDULED: "Agendado", PROCESSING: "Em publicação", PUBLISHED: "Publicado",
 };
 const initial = {videos: [], clips: [], jobs: [], accounts: [], publications: [], integrations: {}, metrics: []};
+const logDate = new Intl.DateTimeFormat("pt-BR", {dateStyle: "short", timeStyle: "medium"});
 let library = initial;
 let timer;
+let openJobLog;
 
 function node(tag, options = {}, ...children) {
   const element = document.createElement(tag);
@@ -193,11 +195,47 @@ function processDialog(video) {
   });
 }
 
-async function jobEvents(job) {
-  const events = await api(`/jobs/${job.id}/events`);
-  const entries = events.length ? events.map((event) =>
-    node("p", {}, `${date(event.stamp)} · ${event.progress}% · ${event.message}`)) : [node("p", {}, "Sem eventos registrados.")];
-  dialog("Histórico do processamento", entries);
+function jobEvents(job) {
+  const entries = node("ol", {className: "job-events", tabIndex: 0, "aria-label": "Registros do processamento"});
+  const progress = node("progress", {max: 100, value: job.progress, "aria-label": "Progresso do processamento"});
+  const status = node("p", {className: "meta", role: "status"}, "Carregando logs…");
+  dialog("Logs do processamento", [progress, status, node("div", {role: "log", "aria-label": "Histórico"}, entries)]);
+  openJobLog = {job, entries, progress, status, cursor: 0, lastStamp: null, loading: false, finished: false};
+  void refreshJobLog();
+}
+
+async function refreshJobLog() {
+  const log = openJobLog;
+  if (!log || log.loading || log.finished || !log.entries.isConnected || !get("dialog").open) return;
+  log.loading = true;
+  try {
+    const job = library.jobs.find((item) => item.id === log.job.id) || log.job;
+    const events = await api(`/jobs/${job.id}/events?after=${log.cursor}`);
+    if (log !== openJobLog || !log.entries.isConnected || !get("dialog").open) return;
+    const latest = events.at(-1);
+    if (latest) {
+      const atEnd = log.entries.scrollHeight - log.entries.clientHeight - log.entries.scrollTop < 12;
+      log.entries.append(...events.map((event) => node("li", {},
+        node("time", {dateTime: new Date(event.stamp * 1000).toISOString(), className: "meta"},
+          `${logDate.format(event.stamp * 1000)} · ${event.progress}%`), node("p", {}, event.message))));
+      if (atEnd) log.entries.scrollTop = log.entries.scrollHeight;
+      log.cursor = latest.seq;
+      log.lastStamp = latest.stamp;
+    }
+    log.job = job;
+    log.progress.value = latest?.progress ?? job.progress;
+    const idle = log.lastStamp == null ? 0 : Date.now() / 1000 - log.lastStamp;
+    log.finished = ["DONE", "FAILED", "CANCELLED"].includes(job.state);
+    const emptyStatus = log.finished ? "Sem registros" : "Aguardando primeiro registro";
+    const detail = job.state === "RUNNING" && idle >= 25 ? ` · Sem registro do worker há ${seconds(idle)}`
+      : log.lastStamp == null ? ` · ${emptyStatus}` : "";
+    const current = `${labels[job.state]} · ${log.progress.value}%${detail}`;
+    if (log.status.textContent !== current) log.status.textContent = current;
+  } catch (error) {
+    log.status.textContent = `Falha ao atualizar os logs. Tentando novamente. ${error.message}`;
+  } finally {
+    log.loading = false;
+  }
 }
 
 function jobRows() {
@@ -218,7 +256,7 @@ function jobRows() {
     }));
     return node("article", {className: "item"}, node("div", {className: "item-main"},
       node("h3", {}, `${job.kind === "VIDEO" ? "Análise" : "Renderização"} · ${clip?.fields.title || video?.name || ""}`),
-      node("p", {}, job.message || "Aguardando worker."),
+      node("p", {className: "job-message"}, job.message || "Aguardando worker."),
       node("p", {className: "meta"}, progress, ` ${job.progress}%`)), actions);
   });
   renderList("jobs", list, "A fila está vazia.");
@@ -496,8 +534,12 @@ function publishingRows() {
 
 function syncVisible(next) {
   const changed = (keys) => keys.some((key) => JSON.stringify(next[key]) !== JSON.stringify(library[key]));
-  const updates = [changed(["videos", "jobs"]), changed(["jobs", "clips", "videos"]),
-                   changed(["clips", "jobs", "accounts"]), changed(["publications", "accounts", "integrations", "clips", "metrics"])];
+  const activeTargets = (jobs, kind, key) => [...new Set(jobs.filter((job) => job.kind === kind && job[key] &&
+    ["QUEUED", "RUNNING"].includes(job.state)).map((job) => job[key]))].sort().join(",");
+  const changedTargets = (kind, key) => activeTargets(next.jobs, kind, key) !== activeTargets(library.jobs, kind, key);
+  const updates = [changed(["videos"]) || changedTargets("VIDEO", "video_id"), changed(["jobs", "clips", "videos"]),
+                   changed(["clips", "accounts"]) || changedTargets("RENDER", "clip_id"),
+                   changed(["publications", "accounts", "integrations", "clips", "metrics"])];
   library = next;
   if (updates[0]) videoRows();
   if (updates[1]) jobRows();
@@ -544,6 +586,9 @@ function sendVideo(file, progress, status) {
 document.querySelectorAll(".nav").forEach((el) => el.addEventListener("click", () => viewTo(el.dataset.view)));
 get("review-filter").addEventListener("change", renderClips);
 get("close-dialog").addEventListener("click", () => get("dialog").close());
+get("dialog").addEventListener("close", () => {
+  if (!get("dialog").open) openJobLog = null;
+});
 get("upload").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -580,6 +625,7 @@ renderClips();
 publishingRows();
 async function poll() {
   await refresh();
+  void refreshJobLog();
   setTimeout(poll, 2500);
 }
 void poll();

@@ -33,12 +33,12 @@ Abra [http://127.0.0.1:8000](http://127.0.0.1:8000). Ambos os processos devem us
 
 1. Em **Vídeos**, confirme a autorização de uso e envie o arquivo MP4 ou WebM com pelo menos uma faixa de áudio. A inspeção lista duração, FPS, resolução, codec e faixas disponíveis para análise.
 2. Clique em **Processar** e ajuste duração, quantidade, idioma e faixa de áudio. A webcam pode ser detectada automaticamente ou indicada com as coordenadas percentuais da sobreposição.
-3. A fila exibe etapas registradas pelo worker. É possível cancelar, consultar logs e tentar de novo. Decodificação do áudio e do vídeo precede a transcrição.
+3. A fila exibe o avanço das etapas. A janela **Logs** atualiza automaticamente e mostra o tempo de mídia processado, os intervalos sem avanço e os erros do worker. É possível cancelar e tentar de novo.
 4. Em **Cortes**, revise o score, a justificativa e o MP4. Ajuste o intervalo, o enquadramento, os metadados e as legendas. Corrija a transcrição na mesma tela. Ao salvar, o worker renderiza somente o corte usando a análise persistida.
 5. Aprove o clipe e selecione uma conta. Revise os metadados específicos, a visibilidade quando aplicável e a data opcional. Autorize o destino. Para enviar a contas adicionais, repita a autorização para cada uma.
 6. Em **Publicação**, acompanhe estados, erros, referências remotas e links retornados. É possível retirar a autorização antes de o worker iniciar o envio. Depois de publicar, registre os números da plataforma para comparação no histórico.
 
-Os limites padrão são 30 GiB por arquivo e 12 horas de duração. O upload usa fluxo para disco e mostra bytes enviados. O progresso do worker indica etapas concluídas, não uma previsão de tempo restante. O worker processa um job de mídia por vez e, em paralelo, atende a fila de publicações.
+Os limites padrão são 30 GiB por arquivo e 12 horas de duração. O upload usa fluxo para disco e mostra bytes enviados. O progresso do worker reflete as etapas e o tempo processado em cada uma. Se o FFmpeg ficar dois minutos sem enviar dados durante a análise visual, a tarefa falha e libera a fila para o próximo processamento. O worker processa um job de mídia por vez e, em paralelo, atende a fila de publicações.
 
 ## Análise e edição
 

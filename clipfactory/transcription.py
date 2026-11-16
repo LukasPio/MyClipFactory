@@ -35,6 +35,7 @@ def transcribe(wav, settings, config, check, progress):
             offset = start / rate
             for segment in source:
                 check()
+                progress(min(total, cursor + window, start + segment.end * rate) / total)
                 midpoint = offset + (segment.start + segment.end) / 2
                 if not cursor / rate <= midpoint < min(total, cursor + window) / rate:
                     continue

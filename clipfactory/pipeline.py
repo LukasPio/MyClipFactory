@@ -3,6 +3,7 @@ import logging
 import signal
 import sqlite3
 import time
+from datetime import timedelta
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from pathlib import Path
@@ -18,6 +19,25 @@ from .transcription import transcribe
 from .vision import VisionFailure, rerank
 
 logger = logging.getLogger(__name__)
+PROGRESS_INTERVAL = 2
+IDLE_LOG_INTERVAL = 10
+
+
+def media_progress(report, first, last, duration, message):
+    last_update, last_position = None, 0
+    total = timedelta(seconds=int(duration))
+
+    def update(position):
+        nonlocal last_update, last_position
+        now = time.monotonic()
+        position = min(position, duration)
+        if position <= last_position or (last_update is not None and now - last_update < PROGRESS_INTERVAL):
+            return
+        elapsed = timedelta(seconds=int(position))
+        report(first + int((last - first) * position / duration), f"{message} · {elapsed} de {total}")
+        last_update, last_position = now, position
+
+    return update
 
 
 class Worker:
@@ -29,12 +49,15 @@ class Worker:
     def run_job(self, job, stop):
         job_id, owner = job["id"], job["owner"]
         finished, cancelled, lost = Event(), Event(), Event()
+        last_progress = None
+        next_idle_log = None
 
         def heartbeat():
+            nonlocal next_idle_log
             while not finished.is_set():
                 try:
                     with self.store.tx(True) as conn:
-                        row = conn.execute("SELECT cancel FROM jobs WHERE id=? AND owner=?",
+                        row = conn.execute("SELECT cancel FROM jobs WHERE id=? AND owner=? AND state='RUNNING'",
                                            (job_id, owner)).fetchone()
                         if not row:
                             lost.set()
@@ -44,6 +67,12 @@ class Worker:
                             return
                         conn.execute("UPDATE jobs SET lease=? WHERE id=? AND owner=?",
                                      (time.time() + 90, job_id, owner))
+                        now = time.monotonic()
+                        if last_progress and now >= next_idle_log:
+                            percent, message, updated = last_progress
+                            elapsed = timedelta(seconds=int(now - updated))
+                            self.store.report(conn, job, percent, f"Aguardando novo avanço há {elapsed} · {message}")
+                            next_idle_log = now + IDLE_LOG_INTERVAL
                 except sqlite3.Error:
                     logger.exception("Heartbeat do job %s falhou", job_id)
                 finished.wait(1)
@@ -55,13 +84,19 @@ class Worker:
                 raise InterruptedError("Processamento interrompido.")
 
         def report(progress, message):
+            nonlocal last_progress, next_idle_log
             check()
             with self.store.tx(True) as conn:
                 self.store.report(conn, job, progress, message)
+                now = time.monotonic()
+                last_progress = (progress, message, now)
+                next_idle_log = now + IDLE_LOG_INTERVAL
 
         thread = Thread(target=heartbeat, daemon=True)
         thread.start()
         try:
+            report(0, "Reiniciando o processamento após interrupção." if job["state"] == "RUNNING"
+                   else "Worker iniciou o processamento.")
             if job["kind"] == "VIDEO":
                 self.analyze(job, check, report)
             else:
@@ -94,6 +129,7 @@ class Worker:
             video = unpack(conn.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone(), "info")
             info = video["info"]
         selected = config["audio_stream"]
+        duration = info["duration"]
         fingerprint = hashlib.sha256(dump({"version": 1, "model": self.settings.model,
                                            "vision": self.settings.vision_model, "config": config}).encode()).hexdigest()
         with self.store.tx() as conn:
@@ -108,13 +144,17 @@ class Worker:
             with TemporaryDirectory(prefix="mcf-analysis-", dir=self.settings.file("tmp", "-").parent) as directory:
                 wav = Path(directory) / "audio.wav"
                 report(8, "Validando e extraindo a faixa de áudio.")
-                extract_audio(source, wav, selected, check)
-                sound = audio_signals(wav, check)
+                extract_audio(source, wav, selected, check,
+                              progress=media_progress(report, 8, 18, duration, "Extraindo áudio"))
+                report(18, "Analisando o volume e as variações do áudio.")
+                sound = audio_signals(wav, check,
+                                      progress=media_progress(report, 18, 23, duration, "Analisando áudio"))
                 report(24, "Decodificando o vídeo e detectando movimento e mudanças de cena.")
-                visuals, faces = visual_signals(source, info, config["detect_webcam"], check)
-                report(45, "Transcrevendo com timestamps por palavra.")
-                transcript = self.asr(wav, self.settings, config, check,
-                                      lambda fraction: report(45 + round(30 * fraction), "Transcrevendo o áudio."))
+                visuals, faces = visual_signals(source, info, config["detect_webcam"], check,
+                                                progress=media_progress(report, 24, 44, duration, "Análise visual"))
+                report(45, "Preparando o modelo de transcrição.")
+                transcribed = media_progress(report, 45, 75, duration, "Transcrevendo o áudio")
+                transcript = self.asr(wav, self.settings, config, check, lambda fraction: transcribed(fraction * duration))
             report(80, "Combinando sinais de imagem, áudio e fala para selecionar candidatos.")
             analysis = candidates(info, transcript, sound, visuals, faces, config)
             if self.settings.vision_model and analysis["candidates"]:
@@ -168,8 +208,10 @@ class Worker:
         output = self.settings.file("clips", f"{clip_id}-{revision}.mp4")
         try:
             report(30, "Codificando o MP4 vertical em H.264/AAC.")
+            duration = clip["fields"]["end"] - clip["fields"]["start"]
             render(source, stage, clip["info"], transcript, candidate, clip["fields"],
-                   candidate["audio_stream"], self.settings, check)
+                   candidate["audio_stream"], self.settings, check,
+                   progress=media_progress(report, 30, 95, duration, "Codificando o MP4"))
             with self.store.tx(True) as conn:
                 check()
                 active = conn.execute("SELECT cancel FROM jobs WHERE id=? AND owner=?",

@@ -70,7 +70,7 @@ def filter_for_layout(index, start, end, origin, mode, region, fps, video):
     )
 
 
-def render(source, output, info, transcript, candidate, edit, audio_stream, settings, check):
+def render(source, output, info, transcript, candidate, edit, audio_stream, settings, check, *, progress=None):
     start, end = edit["start"], edit["end"]
     duration = end - start
     fps = round(min(60, info["fps"]), 4)
@@ -117,7 +117,7 @@ def render(source, output, info, transcript, candidate, edit, audio_stream, sett
                    "-map", "[video]", "-map", "[audio]", "-t", f"{duration:.3f}",
                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-threads:v", "3",
                    "-c:a", "aac", "-ar", "48000", "-b:a", "160k", "-movflags", "+faststart",
-                   "-map_metadata", "-1", temp / "render.mp4"),
-            check, cwd=temp)
+                   "-map_metadata", "-1", temp / "render.mp4", progress=progress is not None),
+            check, cwd=temp, progress=progress)
         check()
         (temp / "render.mp4").replace(output)
