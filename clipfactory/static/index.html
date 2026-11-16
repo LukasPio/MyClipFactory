@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MyClipFactory</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/studio.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <a class="brand" href="/" aria-label="MyClipFactory, início"><span class="mark" aria-hidden="true">▶</span>MyClipFactory</a>
+      <nav aria-label="Área de trabalho">
+        <button class="nav active" type="button" data-view="videos" aria-current="page"><span aria-hidden="true">◫</span> Vídeos</button>
+        <button class="nav" type="button" data-view="clips"><span aria-hidden="true">▷</span> Cortes</button>
+        <button class="nav" type="button" data-view="publishing"><span aria-hidden="true">↗</span> Publicação</button>
+      </nav>
+    </aside>
+    <main>
+      <header class="topline"><span>Estúdio</span><span id="service" role="status">Conectando</span></header>
+      <p id="notice" class="notice" role="status" hidden></p>
+      <section id="videos" class="view">
+        <div class="heading"><div><h1>Vídeos</h1><p>Envie suas gravações autorizadas de gameplay para criar cortes verticais.</p></div></div>
+        <form id="upload" class="upload">
+          <div class="upload-icon" aria-hidden="true">↑</div>
+          <div><h2>Adicionar gravação</h2><p>Arquivo MP4 com uma faixa de áudio.</p></div>
+          <label class="consent"><input id="rights" type="checkbox" required> Tenho autorização para editar esta gravação.</label>
+          <div class="upload-actions"><input id="source" aria-label="Arquivo MP4" type="file" accept="video/mp4,.mp4" required><button class="primary" type="submit">Enviar MP4</button></div>
+          <progress id="upload-progress" max="100" value="0" hidden aria-label="Progresso do upload"></progress>
+          <p id="upload-status" role="status" hidden></p>
+        </form>
+        <div class="section-head"><h2>Gravações</h2><span id="video-count" class="muted"></span></div>
+        <div id="video-list"></div>
+        <div class="section-head"><h2>Fila de processamento</h2><span id="job-count" class="muted"></span></div>
+        <div id="jobs"></div>
+      </section>
+      <section id="clips" class="view" hidden>
+        <div class="heading"><div><h1>Cortes</h1><p>Assista à versão renderizada e revise a edição antes de selecionar os destinos.</p></div></div>
+        <div class="clip-filter"><label for="review-filter">Status</label><select id="review-filter"><option value="">Todos</option><option value="PENDING">A revisar</option><option value="APPROVED">Aprovados</option><option value="REJECTED">Rejeitados</option></select></div>
+        <div id="clip-list" class="clip-grid"></div>
+      </section>
+      <section id="publishing" class="view" hidden>
+        <div class="heading"><div><h1>Publicação</h1><p>Conecte as contas de destino e acompanhe os envios autorizados.</p></div></div>
+        <div class="section-head"><h2>Contas</h2></div>
+        <div id="platforms" class="platform-grid"></div>
+        <div class="section-head"><h2>Histórico</h2></div>
+        <div id="publications"></div>
+      </section>
+    </main>
+  </div>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <div class="dialog-header"><h2 id="dialog-title"></h2><button type="button" id="close-dialog" aria-label="Fechar">×</button></div>
+    <form id="dialog-form"></form>
+  </dialog>
+</body>
+</html>
