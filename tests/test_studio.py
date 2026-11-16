@@ -2,12 +2,14 @@ import base64
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import unittest
 import wave
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
+from unittest.mock import patch
 
 import httpx
 from cryptography.fernet import Fernet
@@ -16,7 +18,7 @@ from fastapi.testclient import TestClient
 from clipfactory.api import create_app
 from clipfactory.captions import subtitles
 from clipfactory.config import Settings
-from clipfactory.media import extract_audio, ffmpeg, probe, run
+from clipfactory.media import extract_audio, ffmpeg, probe, run, visual_signals
 from clipfactory.pipeline import Worker
 from clipfactory.publisher import oauth, queue
 from clipfactory.schemas import Captions
@@ -125,6 +127,9 @@ class StudioTest(unittest.TestCase):
         self.drain()
         data = self.library()
         self.assertEqual([job["state"] for job in data["jobs"]], ["DONE", "DONE"], data["jobs"])
+        render_job = next(job for job in data["jobs"] if job["kind"] == "RENDER")
+        events = self.client.get(f"/api/jobs/{render_job['id']}/events").json()
+        self.assertTrue(any(event["message"].startswith("Codificando o MP4 ·") for event in events), events)
         clip = data["clips"][0]
         response = self.client.get(f"/api/clips/{clip['id']}/video?download=true")
         self.assertEqual(response.status_code, 200, response.text if response.is_error else "")
@@ -147,6 +152,69 @@ class StudioTest(unittest.TestCase):
                 self.assertEqual(response.status_code, status, response.text)
         self.assertEqual(self.library()["videos"], [])
         self.assertFalse(list((self.settings.data / "sources").glob("*")))
+
+    def test_visual_analysis_reports_progress_and_waiting_while_running(self):
+        video = self.send()
+        job_id = self.process(video["id"], limit=1)
+        job = self.store.claim_job()
+        events_url = f"/api/jobs/{job_id}/events"
+        paused, release = Event(), Event()
+
+        def pause_analysis(path, info, detect, check, *, progress):
+            def track(position):
+                progress(position)
+                if position == 12:
+                    paused.set()
+                    release.wait(5)
+
+            return visual_signals(path, info, detect, check, progress=track)
+
+        with (patch("clipfactory.pipeline.visual_signals", side_effect=pause_analysis),
+              patch("clipfactory.pipeline.PROGRESS_INTERVAL", 0), patch("clipfactory.pipeline.IDLE_LOG_INTERVAL", .1)):
+            worker = Thread(target=self.worker.run_job, args=(job, Event()))
+            worker.start()
+            try:
+                self.assertTrue(paused.wait(5), self.library()["jobs"])
+                events = self.client.get(events_url).json()
+                latest = next(event for event in reversed(events) if event["message"].startswith("Análise visual"))
+                self.assertGreater(latest["progress"], 24)
+                self.assertIn("0:00:12", latest["message"])
+                self.assertEqual(self.library()["jobs"][0]["state"], "RUNNING")
+                new_events = []
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    new_events = self.client.get(events_url, params={"after": latest["seq"]}).json()
+                    if new_events:
+                        break
+                    time.sleep(.05)
+                self.assertTrue(new_events)
+                self.assertTrue(all(event["seq"] > latest["seq"] for event in new_events))
+                self.assertEqual(new_events[0]["progress"], latest["progress"])
+                self.assertIn("Aguardando novo avanço", new_events[0]["message"])
+                self.client.post(f"/api/jobs/{job_id}/cancel").raise_for_status()
+            finally:
+                release.set()
+                worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(self.library()["jobs"][0]["state"], "CANCELLED")
+
+    def test_visual_decoder_times_out_and_reports_ffmpeg_details(self):
+        video = self.send()
+        job_id = self.process(video["id"], limit=1)
+        stalled = [sys.executable, "-c", "import sys, time; print('decoder waiting', file=sys.stderr); time.sleep(10)"]
+
+        def stall_decoder(*args, **kwargs):
+            with (patch("clipfactory.media.ffmpeg", return_value=stalled),
+                  patch("clipfactory.media.VISUAL_IDLE_TIMEOUT", .1)):
+                return visual_signals(*args, **kwargs)
+
+        with patch("clipfactory.pipeline.visual_signals", side_effect=stall_decoder):
+            self.worker.run_job(self.store.claim_job(), Event())
+        job = self.library()["jobs"][0]
+        self.assertEqual((job["state"], job["progress"]), ("FAILED", 24), job)
+        latest = self.client.get(f"/api/jobs/{job_id}/events").json()[-1]
+        self.assertRegex(latest["message"], "sem enviar dados de vídeo.*decoder waiting")
+        self.assertIsNone(self.store.claim_job())
 
     def test_delayed_audio_stays_on_the_source_timeline(self):
         video = self.settings.data / "audio-offset.mp4"

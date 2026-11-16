@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS events (
  seq INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id),
  stamp REAL NOT NULL, progress INTEGER NOT NULL, message TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS events_by_job ON events(job_id,seq);
 CREATE TABLE IF NOT EXISTS clips (
  id TEXT PRIMARY KEY, video_id TEXT NOT NULL REFERENCES videos(id),
  candidate TEXT NOT NULL, candidate_key TEXT NOT NULL, state TEXT NOT NULL, revision INTEGER NOT NULL,
@@ -133,8 +134,9 @@ class Store:
 
     def report(self, conn, job, percent, message, state="RUNNING"):
         cursor = conn.execute(
-            "UPDATE jobs SET state=?,progress=?,message=? WHERE id=? AND owner=?",
-            (state, percent, message, job["id"], job["owner"]),
+            """UPDATE jobs SET state=?,progress=?,message=? WHERE id=? AND owner=? AND state='RUNNING'
+               AND (cancel=0 OR ? IN ('CANCELLED','FAILED'))""",
+            (state, percent, message, job["id"], job["owner"], state),
         )
         if not cursor.rowcount:
             raise InterruptedError("O worker perdeu a reserva do job.")

@@ -65,6 +65,9 @@ dialog::backdrop { background: #070b10b8; }
 .dialog-header { position: sticky; top: 0; z-index: 1; padding: 1rem 1.2rem; display: flex; justify-content: space-between; align-items: center; background: #161d23; border-bottom: 1px solid var(--border); }
 #close-dialog { min-width: 2.2rem; padding: .35rem; font-size: 1.25rem; }
 #dialog-form { padding: 1.2rem; display: grid; gap: .9rem; }
+.job-events { max-height: min(50vh, 25rem); overflow: auto; list-style: none; margin: 0; padding: 0; }
+.job-events li { border-top: 1px solid var(--border); padding: .55rem .15rem; }
+.job-events p, .job-message { white-space: pre-wrap; overflow-wrap: anywhere; }
 .field { display: grid; gap: .4rem; font-size: .86rem; }
 input:not([type=checkbox], [type=file]), textarea { min-width: 0; width: 100%; padding: .6rem .7rem; border: 1px solid var(--border); background: #11171c; color: inherit; border-radius: 7px; }
 input[type=color] { height: 2.5rem; }

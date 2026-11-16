@@ -1,11 +1,14 @@
 import json
 import math
+import os
 import subprocess
 import tempfile
 import time
 import wave
+from contextlib import nullcontext
 from fractions import Fraction
 from pathlib import Path
+from selectors import DefaultSelector, EVENT_READ
 
 import numpy as np
 
@@ -20,13 +23,21 @@ class MediaError(RuntimeError):
     pass
 
 
-def run(args, check_cancel=lambda: None, cwd=None, capture=False, timeout=None):
-    with tempfile.TemporaryFile() as stderr:
+def stderr_tail(file):
+    file.seek(max(0, file.tell() - 1800))
+    return file.read().decode(errors="replace").strip()
+
+
+def run(args, check_cancel=lambda: None, cwd=None, capture=False, timeout=None, *, progress=None):
+    progress_file = tempfile.TemporaryFile() if progress else nullcontext()
+    with tempfile.TemporaryFile() as stderr, progress_file as timeline:
+        stdout = timeline if progress else subprocess.PIPE if capture else subprocess.DEVNULL
         with subprocess.Popen(
-            args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+            args, stdin=subprocess.DEVNULL, stdout=stdout,
             stderr=stderr, cwd=cwd,
         ) as process:
             started = time.monotonic()
+            offset, pending = 0, b""
             try:
                 while True:
                     check_cancel()
@@ -34,23 +45,34 @@ def run(args, check_cancel=lambda: None, cwd=None, capture=False, timeout=None):
                         raise MediaError("O arquivo demorou demais para ser inspecionado.")
                     try:
                         output = process.communicate(timeout=0.5)[0]
-                        break
                     except subprocess.TimeoutExpired:
-                        continue
+                        exited = False
+                    else:
+                        exited = True
+                    if progress:
+                        # Read the live report without moving the subprocess's write offset.
+                        chunk = os.pread(timeline.fileno(), 65536, offset)
+                        offset += len(chunk)
+                        *lines, pending = (pending + chunk).split(b"\n")
+                        for line in lines:
+                            key, _, value = line.partition(b"=")
+                            if key == b"out_time_us" and value.isdigit():
+                                progress(int(value) / 1_000_000)
+                    if exited:
+                        break
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait()
         if process.returncode:
-            stderr.seek(max(0, stderr.tell() - 1800))
-            detail = stderr.read().decode(errors="replace").strip()
-            raise MediaError(f"{args[0]} não conseguiu processar a mídia. {detail}")
+            raise MediaError(f"{args[0]} não conseguiu processar a mídia. {stderr_tail(stderr)}")
         return output
 
 
-def ffmpeg(*args):
+def ffmpeg(*args, progress=False):
+    reporting = ("-progress", "pipe:1", "-nostats") if progress else ()
     return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-            "-protocol_whitelist", "file", *map(str, args)]
+            "-protocol_whitelist", "file", *reporting, *map(str, args)]
 
 
 def source_input(path):
@@ -145,13 +167,13 @@ def probe(path, max_seconds, *, extension=None):
             "bitrate": int(container.get("bit_rate") or 0), "audio": audio, "extension": extension}
 
 
-def extract_audio(source, wav, stream, check):
+def extract_audio(source, wav, stream, check, *, progress=None):
     run(ffmpeg("-xerror", "-copyts", "-start_at_zero", *source_input(source), "-map", f"0:{stream}",
                "-vn", "-ac", "1", "-af", "aresample=16000:async=1000:first_pts=0",
-               "-c:a", "pcm_s16le", wav), check)
+               "-c:a", "pcm_s16le", wav, progress=progress is not None), check, progress=progress)
 
 
-def audio_signals(path, check):
+def audio_signals(path, check, *, progress=None):
     timeline = []
     with wave.open(str(path), "rb") as data:
         hz = data.getframerate()
@@ -164,10 +186,40 @@ def audio_signals(path, check):
             zcr = float(np.mean(np.diff(np.signbit(pcm)))) if len(pcm) > 1 else 0
             timeline.append({"t": len(timeline) / 2, "rms": round(rms, 5),
                              "jump": round(max(0, rms - previous), 5), "zcr": round(zcr, 4)})
+            if progress:
+                progress(data.tell() / hz)
     return timeline
 
 
-def visual_signals(path, info, detect, check):
+VISUAL_IDLE_TIMEOUT = 120
+
+
+def decoded_frames(stdout, size, check):
+    frame = memoryview(bytearray(size))
+    received = 0
+    with DefaultSelector() as selector:
+        selector.register(stdout, EVENT_READ)
+        last_read = time.monotonic()
+        while True:
+            check()
+            if not selector.select(timeout=.5):
+                if time.monotonic() - last_read >= VISUAL_IDLE_TIMEOUT:
+                    raise MediaError(f"FFmpeg ficou {VISUAL_IDLE_TIMEOUT} s sem enviar dados de vídeo.")
+                continue
+            count = stdout.readinto(frame[received:])
+            if not count:
+                if received:
+                    raise MediaError("Quadro incompleto durante a decodificação.")
+                return
+            last_read = time.monotonic()
+            received += count
+            if received == size:
+                yield frame
+                received = 0
+                last_read = time.monotonic()
+
+
+def visual_signals(path, info, detect, check, *, progress=None):
     width = max(48, round(240 * min(1, info["width"] / info["height"])))
     height = max(48, round(240 * min(1, info["height"] / info["width"])))
     classifier = None
@@ -184,15 +236,13 @@ def visual_signals(path, info, detect, check):
                   "-vf", f"fps=2:start_time=0,scale={width}:{height},format=gray",
                   "-f", "rawvideo", "-pix_fmt", "gray", "-threads", "1", "pipe:1")
     with tempfile.TemporaryFile() as errors, subprocess.Popen(
-        args, stdout=subprocess.PIPE, stderr=errors, stdin=subprocess.DEVNULL
+        args, stdout=subprocess.PIPE, stderr=errors, stdin=subprocess.DEVNULL, bufsize=0,
     ) as process:
         try:
-            while block := process.stdout.read(width * height):
-                check()
-                if len(block) != width * height:
-                    raise MediaError("Quadro incompleto durante a decodificação.")
+            for block in decoded_frames(process.stdout, width * height, check):
                 frame = np.frombuffer(block, np.uint8).reshape(height, width)
-                delta = np.abs(frame.astype(np.int16) - previous) if previous is not None else np.zeros_like(frame)
+                current = frame.astype(np.int16)
+                delta = np.abs(current - previous) if previous is not None else np.zeros_like(frame)
                 tile_scores = [float(tile.mean()) for row in np.array_split(delta, 3)
                                for tile in np.array_split(row, 3, axis=1)]
                 stamp = len(signals) / 2
@@ -204,7 +254,20 @@ def visual_signals(path, info, detect, check):
                         if w < width * 0.35:
                             faces.append((stamp, (x + w / 2) / width, (y + h / 2) / height,
                                           w / width, h / height))
-                previous = frame
+                previous = current
+                if progress:
+                    progress(len(signals) / 2)
+            try:
+                process.wait(timeout=VISUAL_IDLE_TIMEOUT)
+            except subprocess.TimeoutExpired as error:
+                raise MediaError("FFmpeg parou de enviar dados e não encerrou a decodificação.") from error
+        except MediaError as error:
+            process.kill()
+            process.wait()
+            detail = stderr_tail(errors)
+            if detail:
+                raise MediaError(f"{error} Detalhes do FFmpeg · {detail}") from error
+            raise
         except BaseException:
             process.kill()
             raise
@@ -212,7 +275,9 @@ def visual_signals(path, info, detect, check):
             process.stdout.close()
             process.wait()
         if process.returncode or not signals:
-            raise MediaError("O vídeo contém quadros ilegíveis ou não possui quadros decodificáveis.")
+            detail = stderr_tail(errors)
+            message = "O vídeo contém quadros ilegíveis ou não possui quadros decodificáveis."
+            raise MediaError(f"{message} Detalhes do FFmpeg · {detail}" if detail else message)
     if len(signals) / 2 + max(1.5, info["duration"] * .02) < info["duration"]:
         raise MediaError("A trilha de vídeo termina antes da duração informada pelo contêiner.")
     return signals, faces
