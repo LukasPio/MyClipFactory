@@ -63,6 +63,29 @@ class PublisherTest(unittest.TestCase):
                 tiktok.publish(*args)
         self.assertEqual(sum(path.endswith("video/init/") for path in requests), 1)
 
+    def test_tiktok_pull_does_not_retry_ambiguous_initialization(self):
+        self.settings.tiktok_pull = True
+        checkpoint = {}
+        calls = []
+
+        def handler(req):
+            if req.url.path.endswith("creator_info/query/"):
+                return httpx.Response(200, json={"error": {"code": "ok"}, "data": {
+                    "creator_username": "creator", "privacy_level_options": ["SELF_ONLY"],
+                    "max_video_post_duration_sec": 60}})
+            calls.append(json.loads(req.content)["source_info"])
+            raise httpx.ReadTimeout("Response lost", request=req)
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            args = (client, "secret", {}, self.path, self.fields, checkpoint,
+                    lambda **updates: checkpoint.update(updates), self.settings,
+                    lambda: "https://media.example.test/signed")
+            with self.assertRaisesRegex(PublishError, "comunicação"):
+                tiktok.publish(*args)
+            with self.assertRaisesRegex(PublishError, "Resultado incerto"):
+                tiktok.publish(*args)
+        self.assertEqual(calls, [{"source": "PULL_FROM_URL", "video_url": "https://media.example.test/signed"}])
+
     def test_youtube_429_resumes_existing_session(self):
         state = {"session": "https://www.googleapis.com/session"}
         content_ranges = []

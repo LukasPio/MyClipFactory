@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import time
 import unittest
+import wave
 from pathlib import Path
 from threading import Event
 
@@ -15,7 +16,7 @@ from fastapi.testclient import TestClient
 from clipfactory.api import create_app
 from clipfactory.captions import subtitles
 from clipfactory.config import Settings
-from clipfactory.media import ffmpeg, probe, run
+from clipfactory.media import extract_audio, ffmpeg, probe, run
 from clipfactory.pipeline import Worker
 from clipfactory.publisher import oauth, queue
 from clipfactory.schemas import Captions
@@ -103,6 +104,19 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(self.library()["videos"], [])
         self.assertFalse(list((self.settings.data / "sources").glob("*")))
 
+    def test_delayed_audio_stays_on_the_source_timeline(self):
+        video = self.settings.data / "audio-offset.mp4"
+        wav = self.settings.data / "audio-offset.wav"
+        run(ffmpeg("-f", "lavfi", "-i", "color=s=240x160:r=12:d=8",
+                   "-itsoffset", "2", "-f", "lavfi", "-i", "sine=frequency=380:sample_rate=16000:duration=6",
+                   "-c:v", "libx264", "-threads:v", "1", "-c:a", "aac", video))
+        stream = probe(video, 60)["audio"][0]["index"]
+        extract_audio(video, wav, stream, lambda: None)
+        with wave.open(str(wav), "rb") as audio:
+            self.assertFalse(any(audio.readframes(16000)))
+            audio.setpos(16000 * 3)
+            self.assertTrue(any(audio.readframes(8000)))
+
     def test_queue_cancel_and_retry(self):
         video = self.send()
         first = self.process(video["id"])
@@ -153,6 +167,11 @@ class StudioTest(unittest.TestCase):
         pending = self.allow_destination(clip, instagram, "", time.time() + 3000)
         self.assertEqual(pending.json()["state"], "SCHEDULED", pending.text)
         self.assertIsNone(queue.begin(self.store))
+        withdrawal = self.client.post(f"/api/publications/{pending.json()['id']}/cancel")
+        self.assertEqual(withdrawal.json()["state"], "PENDING")
+        self.assertIsNone(queue.begin(self.store))
+        self.assertEqual(self.allow_destination(clip, instagram, "", time.time() + 3000).json()["id"],
+                         pending.json()["id"])
         corrected = clip["fields"] | {"title": "Revised cut", "corrections": [{"id": active_segment["id"], "text": "Revised caption."}]}
         result = self.client.put(f"/api/clips/{source_id}?revision=1", json=corrected)
         self.assertEqual(result.status_code, 202, result.text)
@@ -208,6 +227,13 @@ class StudioTest(unittest.TestCase):
         self.assertEqual(history[first.json()["id"]]["url"], "https://www.youtube.com/shorts/video42")
         self.assertEqual(history[done.json()["id"]]["state"], "PUBLISHED")
         self.assertEqual(sum(path.endswith("/media_publish") for _, path in requests), 1)
+
+        metrics_url = f"/api/publications/{first.json()['id']}/metrics"
+        self.assertEqual(self.client.post(metrics_url, json={"views": 200, "likes": 10}).status_code, 201)
+        self.assertEqual(self.client.post(metrics_url, json={"views": 333, "retention": 54}).status_code, 201)
+        history = self.client.get(metrics_url).json()
+        self.assertEqual([item["fields"]["views"] for item in history], [333, 200])
+        self.assertEqual(self.library()["metrics"][0]["fields"]["views"], 333)
 
     @unittest.skipUnless(os.getenv("MCF_TEST_WHISPER") == "1", "Teste opt-in do modelo Whisper real")
     def test_real_whisper_english_timestamps(self):

@@ -59,7 +59,7 @@ def filter_for_layout(index, start, end, origin, mode, region, fps, video):
             f"[f{index}]{crop},scale=380:280:force_original_aspect_ratio=decrease:force_divisible_by=2,"
             f"setsar=1[fp{index}];[gp{index}][fp{index}]overlay=48:(320-oh)/2[v{index}]"
         )
-    game_h, face_h = (1240, 540) if mode == "split" else (860, 920)
+    game_h, face_h = (960, 440) if mode == "split" else (640, 760)
     return (
         base + f",split[g{index}][f{index}];"
         f"[g{index}]scale=1080:{game_h}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
@@ -102,7 +102,7 @@ def render(source, output, info, transcript, candidate, edit, audio_stream, sett
         if len(chapters) > 1:
             stack += f"concat=n={len(chapters)}:v=1:a=0,"
         video_filters.append(stack + "subtitles=caption.ass,format=yuv420p[video]")
-        audio = f"[0:{audio_stream}]aresample=48000,aformat=channel_layouts=stereo"
+        audio = f"[0:{audio_stream}]aresample=48000:async=1000:first_pts=0,aformat=channel_layouts=stereo"
         if track:
             audio += (
                 f",apad,atrim=duration={duration:.3f},asplit=2[voice][key];"

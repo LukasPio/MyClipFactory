@@ -1,12 +1,10 @@
 import json
 import math
-import os
 import subprocess
 import tempfile
 import time
 import wave
 from fractions import Fraction
-from pathlib import Path
 
 import numpy as np
 
@@ -63,7 +61,10 @@ def probe(path, max_seconds):
                   "language": s.get("tags", {}).get("language", "und")}
                  for s in raw["streams"] if s["codec_type"] == "audio"]
         duration = float(container["duration"])
-        fps = float(Fraction(video["avg_frame_rate"]))
+        rate = video.get("avg_frame_rate")
+        if not rate or rate in {"0/0", "0/1"}:
+            rate = video["r_frame_rate"]
+        fps = float(Fraction(rate))
         width, height = video["width"], video["height"]
         rotation = next((d["rotation"] for d in video.get("side_data_list", []) if "rotation" in d), 0)
         if round(rotation) % 180 == 90:
@@ -84,8 +85,9 @@ def probe(path, max_seconds):
 
 
 def extract_audio(source, wav, stream, check):
-    run(ffmpeg("-xerror", "-f", "mov", "-i", source, "-map", f"0:{stream}",
-               "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", wav), check)
+    run(ffmpeg("-xerror", "-copyts", "-start_at_zero", "-f", "mov", "-i", source, "-map", f"0:{stream}",
+               "-vn", "-ac", "1", "-af", "aresample=16000:async=1000:first_pts=0",
+               "-c:a", "pcm_s16le", wav), check)
 
 
 def audio_signals(path, check):
@@ -116,9 +118,9 @@ def visual_signals(path, info, detect, check):
             raise MediaError("O classificador facial do OpenCV está indisponível.")
     signals, faces = [], []
     previous = None
-    args = ffmpeg("-xerror", "-threads", "2", "-f", "mov", "-i", path,
+    args = ffmpeg("-xerror", "-copyts", "-start_at_zero", "-threads", "2", "-f", "mov", "-i", path,
                   "-map", f"0:{info['video_stream']}", "-an", "-filter_threads", "1",
-                  "-vf", f"fps=2,scale={width}:{height},format=gray",
+                  "-vf", f"fps=2:start_time=0,scale={width}:{height},format=gray",
                   "-f", "rawvideo", "-pix_fmt", "gray", "-threads", "1", "pipe:1")
     with tempfile.TemporaryFile() as errors, subprocess.Popen(
         args, stdout=subprocess.PIPE, stderr=errors, stdin=subprocess.DEVNULL
@@ -153,11 +155,3 @@ def visual_signals(path, info, detect, check):
     if len(signals) / 2 + max(1.5, info["duration"] * .02) < info["duration"]:
         raise MediaError("A trilha de vídeo termina antes da duração declarada pelo MP4.")
     return signals, faces
-
-
-def atomic_json(path, value):
-    from .store import dump
-
-    temp = path.with_suffix(".tmp")
-    temp.write_text(dump(value), encoding="utf-8")
-    os.replace(temp, path)

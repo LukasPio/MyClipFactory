@@ -308,6 +308,12 @@ def create_app(settings=None):
             if privacy != "private" and not settings.youtube_audited:
                 raise HTTPException(422, "O aplicativo YouTube deve passar pela auditoria antes de publicar fora de privado.")
         elif platform == "tiktok":
+            if not fields["tiktok_terms"]:
+                raise HTTPException(422, "Confirme os termos do TikTok antes de autorizar o envio.")
+            if settings.tiktok_pull:
+                queue.signed_media(settings, "validation")
+            elif urlsplit(settings.origin).hostname not in {"127.0.0.1", "localhost", "::1"}:
+                raise HTTPException(422, "Para arquivos em servidor, configure PULL_FROM_URL com um domínio verificado.")
             creator = creator_info(payload.account_id)
             tiktok.validate(fields, creator, fields["duration"], settings)
         elif platform == "instagram":
@@ -374,7 +380,7 @@ def create_app(settings=None):
         with store.tx() as conn:
             row = conn.execute("""SELECT p.clip_id,p.revision FROM publications p
                 JOIN accounts a ON a.id=p.account_id WHERE p.id=? AND p.approved IS NOT NULL
-                AND a.platform='instagram' AND p.state IN ('PROCESSING','PUBLISHED')""", (publication_id,)).fetchone()
+                AND a.platform IN ('instagram','tiktok') AND p.state IN ('PROCESSING','PUBLISHED')""", (publication_id,)).fetchone()
         if not row:
             raise HTTPException(404, "Mídia indisponível.")
         path = settings.file("clips", f"{row['clip_id']}-{row['revision']}.mp4")

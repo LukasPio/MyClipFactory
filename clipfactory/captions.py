@@ -1,6 +1,3 @@
-import math
-
-
 def ass_time(seconds):
     centis = max(0, round(seconds * 100))
     return f"{centis//360000}:{centis//6000%60:02d}:{centis//100%60:02d}.{centis%100:02d}"

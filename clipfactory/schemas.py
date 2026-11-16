@@ -88,6 +88,7 @@ class Publish(Metadata):
     own_brand: bool = False
     branded_content: bool = False
     consent: bool
+    tiktok_terms: bool = False
 
 
 class Metrics(Input):

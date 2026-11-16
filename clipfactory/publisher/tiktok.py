@@ -58,22 +58,30 @@ def publish(client, token, account, path, fields, checkpoint, save, settings, si
         if state == "PROCESSING_UPLOAD" and checkpoint.get("uncertain_upload"):
             raise PublishError("Upload TikTok interrompido. Confira o TikTok antes de qualquer reenvio.")
         return Result(wait=25)
+    if checkpoint.get("pull_started"):
+        raise PublishError("Resultado incerto no TikTok. Consulte a conta antes de reenviar o vídeo.")
     creator = profile(client, token)
     validate(fields, creator, fields["duration"], settings)
     size = path.stat().st_size
     chunk_size = min(size, 32 * 1024**2)
     count = size // chunk_size
+    source = {"source": "FILE_UPLOAD", "video_size": size, "chunk_size": chunk_size, "total_chunk_count": count}
+    if settings.tiktok_pull:
+        source = {"source": "PULL_FROM_URL", "video_url": signed_url()}
+        save(pull_started=True)
     response = call(client, token, "video/init", {
         "post_info": {"title": caption(fields, "caption", 2200) or fields["title"],
                       "privacy_level": fields["privacy"], "disable_duet": not fields["allow_duet"],
                       "disable_comment": not fields["allow_comment"], "disable_stitch": not fields["allow_stitch"],
                       "brand_content_toggle": fields["branded_content"], "brand_organic_toggle": fields["own_brand"]},
-        "source_info": {"source": "FILE_UPLOAD", "video_size": size, "chunk_size": chunk_size,
-                        "total_chunk_count": count},
+        "source_info": source,
     })
     publish_id = response.get("publish_id")
     if not isinstance(publish_id, str) or not 1 <= len(publish_id) <= 240:
         raise PublishError("O TikTok não retornou o identificador da publicação.")
+    if settings.tiktok_pull:
+        save(publish_id=publish_id, username=creator["username"])
+        return Result()
     url = require_https(response.get("upload_url", ""), {"tiktokapis.com", "tiktok.com"})
     save(publish_id=publish_id, username=creator["username"], uncertain_upload=True)
     with path.open("rb") as file:

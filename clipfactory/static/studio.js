@@ -361,6 +361,7 @@ async function publicationDialog(clip, account) {
     fields.caption ||= fields.title;
   }
   const options = [];
+  let updateDisclosure;
   if (account.platform === "youtube") {
     options.push(field("Visibilidade", select("privacy", [["private", "Privado"], ["unlisted", "Não listado"], ["public", "Público"]], "private")));
   }
@@ -373,14 +374,47 @@ async function publicationDialog(clip, account) {
       [key, privacyLabels[key] || key])], "");
     privacy.required = true;
     options.push(field("Visibilidade", privacy));
+    if ((clip.fields.end - clip.fields.start) > info.max_duration) {
+      throw new Error("Este corte excede a duração permitida pela conta TikTok.");
+    }
     const toggles = [["allow_comment", "Permitir comentários", !info.comment],
-      ["allow_duet", "Permitir duetos", !info.duet], ["allow_stitch", "Permitir costura", !info.stitch],
-      ["commercial", "Divulgação comercial", false], ["own_brand", "Minha marca", false],
-      ["branded_content", "Marca de terceiros", false]];
+      ["allow_duet", "Permitir duetos", !info.duet], ["allow_stitch", "Permitir costura", !info.stitch]];
     options.push(...toggles.map(([key, label, disabled]) => field(label, input(key, "checkbox", "", {disabled}))));
+    const commercial = input("commercial", "checkbox", "");
+    const own = input("own_brand", "checkbox", "");
+    const branded = input("branded_content", "checkbox", "");
+    const promo = node("p", {className: "meta"});
+    const disclosures = node("fieldset", {}, node("legend", {}, "Divulgação comercial"), field("Minha marca", own),
+      field("Marca de terceiros", branded), promo);
+    const policy = node("a", {href: "https://www.tiktok.com/legal/page/global/bc-policy/en",
+      target: "_blank", rel: "noopener noreferrer"}, "Política de conteúdo de marca");
+    const terms = node("span", {}, "Concordo com a ",
+      node("a", {href: "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en",
+        target: "_blank", rel: "noopener noreferrer"}, "Confirmação de uso de música"), " do TikTok",
+      node("span", {id: "branded-terms"}, " e com a ", policy), ".");
+    options.push(field("Ativar divulgação comercial", commercial), disclosures,
+      node("label", {className: "consent"}, input("tiktok_terms", "checkbox", "", {required: true}), terms),
+      node("p", {className: "meta"}, "O TikTok pode levar alguns minutos para processar o corte."));
+    updateDisclosure = () => {
+      disclosures.hidden = !commercial.checked;
+      if (!commercial.checked) own.checked = branded.checked = false;
+      branded.disabled = privacy.value === "SELF_ONLY";
+      if (branded.disabled) branded.checked = false;
+      const privateOption = Array.from(privacy.options).find((option) => option.value === "SELF_ONLY");
+      if (privateOption) privateOption.disabled = branded.checked;
+      promo.textContent = branded.checked ? "O vídeo terá o rótulo Parceria paga."
+        : own.checked ? "O vídeo terá o rótulo Conteúdo promocional."
+        : branded.disabled ? "Parcerias pagas exigem visibilidade elegível." : "Selecione o tipo de divulgação.";
+      get("branded-terms").hidden = !branded.checked;
+      commercial.setCustomValidity(commercial.checked && !own.checked && !branded.checked
+        ? "Selecione um tipo de divulgação comercial." : "");
+    };
+    for (const control of [commercial, own, branded, privacy]) control.addEventListener("change", updateDisclosure);
   }
   dialog(`${platformNames[account.platform]} · ${account.label}`, [
     node("p", {}, `Versão ${clip.revision} · ${seconds(clip.fields.end - clip.fields.start)}`),
+    node("video", {className: "publish-preview", controls: true, playsInline: true, preload: "metadata",
+      src: `/api/clips/${clip.id}/video`}),
     ...metadataControls(fields), ...options,
     field("Publicar em (horário local, opcional)", input("due", "datetime-local", "")),
     field("Autorizo enviar este corte para esta conta com as opções acima.", input("consent", "checkbox", "", {required: true})),
@@ -389,12 +423,14 @@ async function publicationDialog(clip, account) {
     const result = await api(`/clips/${clip.id}/publish`, "POST", {
       ...metadata(form), account_id: account.id, revision: clip.revision, due: due ? new Date(due).getTime() / 1000 : null,
       privacy: form.elements.namedItem("privacy")?.value || "", consent: checked(form, "consent"),
+      tiktok_terms: checked(form, "tiktok_terms"),
       ...Object.fromEntries(["allow_comment", "allow_duet", "allow_stitch", "commercial", "own_brand", "branded_content"]
         .map((key) => [key, checked(form, key)])),
     });
     flash(`Publicação · ${labels[result.state] || result.state}.`);
     viewTo("publishing");
   });
+  if (updateDisclosure) updateDisclosure();
 }
 
 const metricsFields = {views: "Visualizações", likes: "Curtidas", comments: "Comentários",
